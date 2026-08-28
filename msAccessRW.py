@@ -60,11 +60,21 @@ class cMsAccessAPI:
 
     # =====================================
     @contextlib.contextmanager
+    # Generator[YieldType, SendType, ReturnType]: this function yields pyodbc.Connection
+    # values, never receives values sent into it, and never returns a value itself.
     def connect(self) -> collections.abc.Generator[pyodbc.Connection, None, None]:
         """Yields an open pyodbc connection.
 
         Commits the transaction on normal exit, rolls it back if an
         exception occurs, and always closes the connection afterwards.
+
+        This must be a generator (use "yield", not "return") because
+        @contextlib.contextmanager turns a paused generator into a "with"
+        block: code before "yield" becomes __enter__ (open the connection),
+        the yielded value becomes the "as conn" variable, and code after
+        "yield" becomes __exit__ (commit/rollback/close). A plain function
+        would run to completion and return before the "with" block even
+        started, leaving no way to resume it afterwards to clean up.
         """
         try:
             conn = pyodbc.connect(self.connStr)
@@ -80,6 +90,12 @@ class cMsAccessAPI:
             raise
         finally:
             conn.close()
+
+    # =====================================
+    @staticmethod
+    def getAvailableDBdrivers() -> list[str]:
+        """Returns the names of all ODBC drivers installed on this machine."""
+        return pyodbc.drivers()
 
     # =====================================
     def testConnection(self) -> bool:
