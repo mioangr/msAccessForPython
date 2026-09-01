@@ -39,6 +39,10 @@ class cMsAccessAPI:
     """Wrapper around pyodbc that manages the connection string and
     connection lifecycle for a single Microsoft Access database file."""
 
+    # in ms access, dates should be wrapped with #, for example, #2017-01-31#
+    # Always use the YYYY=MM-DD format
+    config_dateQualifier : str = "#"  
+
     def __init__(self, aFilename: str, aDriverType: cDriverType = cDriverType.msAccess_64bit):
         # validate inputs before building the connection string, so mistakes
         # surface immediately instead of at the first query
@@ -156,7 +160,20 @@ class cDBoperations:
 
     # =====================================
     def executeSql(self, aSqlStr: str, aParams: list | tuple = ()) -> None:
-        """Executes an arbitrary SQL statement (e.g. DDL), with optional bind parameters."""
+        """Executes an arbitrary SQL statement (e.g. DDL), with optional bind parameters.
+
+            Example with aParams:
+                df = db.selectFromDB(
+                    "SELECT * FROM MyTable WHERE tradeDate >= ? AND symbol = ?",
+                    [datetime.date(2024, 1, 1), "AAPL"],
+                    )
+
+            In pyodbc's parameterized execution, pyodbc binds each ? placeholder to the corresponding value directly 
+            via the ODBC driver (as a typed parameter), rather than substituting text into the SQL string. 
+            So NO quoting/escaping of strings happens in Python code; the driver handles it, and this also protects against SQL injection.
+        
+            
+        """
         try:
             with self.api.connect() as conn:
                 cursor = conn.cursor()
@@ -202,51 +219,42 @@ class cDBoperations:
     def updateRows(
         self,
         aTablename: str,
-        aRows: list[pandas.Series],
+        aDF: pandas.DataFrame,
         aKeyColumns: list[str],
         ) -> None:
         """Updates rows in aTablename, matching on aKeyColumns, using parameterized SQL."""
-        if not aRows:
+        if aDF.empty:
             return
 
-        sql = ""
-        try:
-            with self.api.connect() as conn:
-                cursor = conn.cursor()
-                for row in aRows:
-                    # columns to update are every column that isn't part of the match key
-                    setCols = [col for col in row.index if col not in aKeyColumns]
-                    if not setCols:
-                        continue
+        missingKeyColumns = [col for col in aKeyColumns if col not in aDF.columns]
+        if missingKeyColumns:
+            raise ValueError(f"aKeyColumns not found in aDF: {missingKeyColumns}. The avalailable columns are:{aDF.columns}")
 
-                    setClause = ", ".join(f"{col} = ?" for col in setCols)
-                    whereClause = " AND ".join(f"{col} = ?" for col in aKeyColumns)
-                    sql = f"UPDATE {aTablename} SET {setClause} WHERE {whereClause}"
-                    params = [self._toParam(row[col]) for col in setCols] + [
-                        self._toParam(row[col]) for col in aKeyColumns
-                        ]
-                    cursor.execute(sql, params)
-        except Exception as e:
-            logger.error("Error in updateRows: %s. Last sql was: %s", e, sql)
-            raise
+        # columns to update are every column that isn't part of the match key
+        setCols = [col for col in aDF.columns if col not in aKeyColumns]
+        if not setCols:
+            return
+
+        setClause = ", ".join(f"{col} = ?" for col in setCols)
+        whereClause = " AND ".join(f"{col} = ?" for col in aKeyColumns)
+        sqlTemplate = f"UPDATE {aTablename} SET {setClause} WHERE {whereClause}"
+
+        for _, row in aDF.iterrows():
+            params = [self._toParam(row[col]) for col in setCols] + [
+                self._toParam(row[col]) for col in aKeyColumns
+                ]
+            self.executeSql(sqlTemplate, params)
 
     # =====================================
-    def insertRows(self, aTablename: str, aRows: list[pandas.Series]) -> None:
+    def insertRows(self, aTablename: str, aDF: pandas.DataFrame) -> None:
         """Inserts rows into aTablename using parameterized SQL."""
-        if not aRows:
+        if aDF.empty:
             return
 
-        sql = ""
-        try:
-            with self.api.connect() as conn:
-                cursor = conn.cursor()
-                columns = aRows[0].index.tolist()
-                placeholders = ", ".join(["?"] * len(columns))
-                sql = f"INSERT INTO {aTablename} ({', '.join(columns)}) VALUES ({placeholders})"
+        columns = aDF.columns.tolist()
+        placeholders = ", ".join(["?"] * len(columns))
+        sqlTemplate = f"INSERT INTO {aTablename} ({', '.join(columns)}) VALUES ({placeholders})"
 
-                for row in aRows:
-                    params = [self._toParam(row[col]) for col in columns]
-                    cursor.execute(sql, params)
-        except Exception as e:
-            logger.error("Error in insertRows: %s. Last sql was: %s", e, sql)
-            raise
+        for _, row in aDF.iterrows():
+            params = [self._toParam(row[col]) for col in columns]
+            self.executeSql(sqlTemplate, params)
