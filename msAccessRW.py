@@ -29,6 +29,12 @@ import pyodbc
 logger = logging.getLogger(__name__)
 
 
+# =====================================
+def getAvailableDBdrivers() -> list[str]:
+    """Returns the names of all ODBC drivers installed on this machine."""
+    return pyodbc.drivers()
+
+
 class cDriverType(enum.Enum):
     """Supported Microsoft Access ODBC drivers."""
     msAccess_32bit = "Microsoft Access Driver (*.mdb)"
@@ -43,17 +49,17 @@ class cMsAccessAPI:
     # Always use the YYYY=MM-DD format
     config_dateQualifier : str = "#"  
 
-    def __init__(self, aFilename: str, aDriverType: cDriverType = cDriverType.msAccess_64bit):
+    def __init__(self, aFullPathFilename: str, aDriverType: cDriverType = cDriverType.msAccess_64bit):
         # validate inputs before building the connection string, so mistakes
         # surface immediately instead of at the first query
         if not isinstance(aDriverType, cDriverType):
             raise TypeError(f"aDriverType must be a cDriverType, got {type(aDriverType).__name__}")
-        if not aFilename:
+        if not aFullPathFilename:
             raise ValueError("aFilename must not be empty")
 
-        dbPath = pathlib.Path(aFilename)
+        dbPath = pathlib.Path(aFullPathFilename)
         if not dbPath.is_file():
-            raise FileNotFoundError(f"Database file not found: {aFilename}")
+            raise FileNotFoundError(f"Database file not found: {aFullPathFilename}")
 
         self.filename = dbPath
         self.driverType = aDriverType
@@ -61,6 +67,7 @@ class cMsAccessAPI:
             f"DRIVER={{{self.driverType.value}}};"
             f"DBQ={self.filename};"
             )
+
 
     # =====================================
     @contextlib.contextmanager
@@ -95,11 +102,7 @@ class cMsAccessAPI:
         finally:
             conn.close()
 
-    # =====================================
-    @staticmethod
-    def getAvailableDBdrivers() -> list[str]:
-        """Returns the names of all ODBC drivers installed on this machine."""
-        return pyodbc.drivers()
+
 
     # =====================================
     def testConnection(self) -> bool:
@@ -111,6 +114,7 @@ class cMsAccessAPI:
             logger.error("testConnection failed: %s", e)
             return False
 
+# ==================================================================
 
 class cDBoperations:
     """Higher level database read/write helpers built on top of cMsAccessAPI."""

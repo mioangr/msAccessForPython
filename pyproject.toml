@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "msAccessForPython"
+version = "0.1.0"
+description = "Helpers for reading and writing Microsoft Access databases."
+requires-python = ">=3.9"
+dependencies = [
+    "pandas",
+    "pyodbc",
+]
+
+[tool.setuptools]
+py-modules = ["msAccessRW"]
