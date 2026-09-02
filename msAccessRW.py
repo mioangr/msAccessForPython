@@ -49,7 +49,7 @@ class cMsAccessAPI:
     # Always use the YYYY=MM-DD format
     config_dateQualifier : str = "#"  
 
-    def __init__(self, aFullPathFilename: str, aDriverType: cDriverType = cDriverType.msAccess_64bit):
+    def __init__(self, aFullPathFilename: str, aDriverType: cDriverType = cDriverType.msAccess_32bit):
         # validate inputs before building the connection string, so mistakes
         # surface immediately instead of at the first query
         if not isinstance(aDriverType, cDriverType):
@@ -163,6 +163,22 @@ class cDBoperations:
         return aValue
 
     # =====================================
+    @staticmethod
+    def renderSqlForDebug(aSqlStr: str, aParams: list | tuple = ()) -> str:
+        """Builds a best-effort, human-readable version of aSqlStr with each "?" replaced
+        by its corresponding aParams value (via encodeValue). For logging/debugging only;
+        pyodbc never actually builds this string when executing parameterized SQL."""
+        if not aParams:
+            return aSqlStr
+        parts = aSqlStr.split("?")
+        if len(parts) - 1 != len(aParams):
+            return aSqlStr  # placeholder/param count mismatch, fall back to the raw SQL
+        rendered = parts[0]
+        for value, part in zip(aParams, parts[1:]):
+            rendered += cDBoperations.encodeValue(value) + part
+        return rendered
+
+    # =====================================
     def executeSql(self, aSqlStr: str, aParams: list | tuple = ()) -> None:
         """Executes an arbitrary SQL statement (e.g. DDL), with optional bind parameters.
 
@@ -187,7 +203,10 @@ class cDBoperations:
                 else:
                     cursor.execute(aSqlStr)
         except Exception as e:
-            logger.error("Error in executeSql: %s", e)
+            logger.error(
+                "Error\n%s\n in executeSql while executing the sql string:\n%s",
+                e, self.renderSqlForDebug(aSqlStr, aParams),
+                )
             raise
 
     # =====================================
@@ -217,15 +236,22 @@ class cDBoperations:
             return result
         except Exception as e:
             logger.error("Error in selectFromDB: %s", e)
-            return pandas.DataFrame()
+            raise
+
+
+    def getTableRowsCount(self, aTablename: str) -> int:
+        """Returns the row count of the specified table as an integer."""
+        try:
+            nRows = self.selectFromDB(f"SELECT COUNT(*) AS cnt FROM {aTablename}").iloc[0]["cnt"]
+            return nRows
+        except Exception as e:
+            logger.error("Error in getTableRowsCount: %s", e)
+            raise
+
+
 
     # =====================================
-    def updateRows(
-        self,
-        aTablename: str,
-        aDF: pandas.DataFrame,
-        aKeyColumns: list[str],
-        ) -> None:
+    def updateRows( self, aTablename: str, aDF: pandas.DataFrame, aKeyColumns: list[str], ) -> None:
         """Updates rows in aTablename, matching on aKeyColumns, using parameterized SQL."""
         if aDF.empty:
             return
@@ -249,16 +275,94 @@ class cDBoperations:
                 ]
             self.executeSql(sqlTemplate, params)
 
+
     # =====================================
     def insertRows(self, aTablename: str, aDF: pandas.DataFrame) -> None:
         """Inserts rows into aTablename using parameterized SQL."""
+        nInitialRows = self.getTableRowsCount(aTablename)
+        print(f"Will insert {len(aDF)} rows into {aTablename}. Initial row count: {nInitialRows}")
+
         if aDF.empty:
             return
 
         columns = aDF.columns.tolist()
         placeholders = ", ".join(["?"] * len(columns))
-        sqlTemplate = f"INSERT INTO {aTablename} ({', '.join(columns)}) VALUES ({placeholders})"
+        # sqlTemplate = f"INSERT INTO {aTablename} ({', '.join(columns)}) VALUES ({placeholders})"
 
         for _, row in aDF.iterrows():
             params = [self._toParam(row[col]) for col in columns]
+            # If any of the params is NULL or NaT, then remove that parameter from the list of params and the corresponding column from the SQL string before execution.
+            non_null_indices = [i for i, param in enumerate(params) if param is not None and not (isinstance(param, pandas.Timestamp) and pandas.isna(param))]
+            if not non_null_indices:
+                continue
+            filtered_columns = [columns[i] for i in non_null_indices]
+            filtered_params = [params[i] for i in non_null_indices]
+            placeholders = ", ".join(["?"] * len(filtered_columns))
+            sqlTemplate = f"INSERT INTO {aTablename} ({', '.join(filtered_columns)}) VALUES ({placeholders})"
+            params = filtered_params
             self.executeSql(sqlTemplate, params)
+
+        nFinalRows = self.getTableRowsCount(aTablename)
+        assert nFinalRows == len(aDF) + nInitialRows, f"Mismatch in expected number of inserted rows: Rows to be inserted: {len(aDF)}, but inserted {nFinalRows-nInitialRows}"
+        
+
+# =================================================================
+# The class encapsulates the connection to a Microsoft Access database via cMsAccessAPI class and
+# the db operations via the cDBoperations class.
+# The resulting object is used to interact with a Microsoft Access database.
+# The caller should use the dbOperations attribute to perform database operations,
+# e.g. db.dbOperations.selectFromDB(...)
+# To subclass this, one would typically extend cMsAccessDB and add additional methods as needed.
+# e.g. 
+# class MyAccessDB(cMsAccessDB):
+#     def myCustomMethod(self):
+#         self.dbOperations.selectFromDB("MyTable")
+# =================================================================
+class cMsAccessDB:
+
+    def __init__(self, aFullpathname: str, aDriverType: cDriverType = cDriverType.msAccess_32bit):
+        self.mdbFullpathname = aFullpathname
+        self.dbApi = cMsAccessAPI(aFullpathname, aDriverType)
+        self.dbOperations = cDBoperations(self.dbApi)
+        
+        
+
+'''
+Other examples from older code:
+
+def insertDataInMDB(aTablename, aDF):
+    print("Entering insertDataInMDB()")
+    mdbFullpathname = os.path.join(config_workingDir, config_MDB_filename)
+    try:
+        # Microsoft Access Driver (*.mdb): works with 32-bit Python
+        # Microsoft Access Driver (*.mdb, *.accdb): works with 64-bit Python
+        # we want to use Microsoft Access Driver (*.mdb, *.accdb)
+        conn_str = (
+            r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
+            r'DBQ=' + mdbFullpathname + ';'
+        )
+        conn_str = (
+            r'DRIVER={Microsoft Access Driver (*.mdb)};'
+            r'DBQ=C:\\tmp\\PMSdownloads.mdb;'
+        )
+
+        conn_str = 'DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ="{}";'.format(mdbFullpathname)
+        print("Will use connection string:", conn_str)
+        cnxn = pyodbc.connect(conn_str)
+
+    except pyodbc.Error as e:
+        print("Error in Connection", e)
+        sys.exit(0)
+
+    print("Will insert the rows in the MDB table", aTablename)
+    # SQL = 'SELECT * FROM Index_data;'
+    # dfins = pd.read_sql(SQL, cnxn)
+    for index, row in aDF.iterrows():
+        sqlStr = "INSERT INTO "+ aTablename+ "(" + aDF.columns + ") VALUES("+row+")"
+        with cnxn.cursor() as DBcursor:
+            print(sqlStr)
+            # DBcursor.execute( sqlStr ) 
+            # DBcursor.commit()
+    cnxn.close()
+
+'''
