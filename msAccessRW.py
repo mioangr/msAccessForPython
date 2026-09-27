@@ -235,8 +235,12 @@ class cDBoperations:
                 [datetime.date(2024, 1, 1), "AAPL"],
                 )
         """
+        import warnings
+
         try:
             with self.api.connect() as conn:
+                # No need to see every time this warning.
+                warnings.filterwarnings( "ignore", category=UserWarning, message="pandas only supports SQLAlchemy connectable.*", )
                 result = pandas.read_sql_query(aSqlStr, conn, params=aParams or None)
 
             # cast columns to their preferred Python type
