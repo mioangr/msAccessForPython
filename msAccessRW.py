@@ -13,9 +13,13 @@ Classes:
                     parameterized insert/update, raw SQL execution).
 
 Usage example:
+    import msAccessRW
     api = cMsAccessAPI(r"C:/data/mydb.accdb", cDriverType.msAccess_64bit)
     db = cDBoperations(api)
     df = db.selectFromDB("SELECT * FROM MyTable")
+    # save as csv without index
+    df.to_csv("output.csv", index=False)
+
 """
 
 import collections.abc
@@ -36,7 +40,15 @@ def getAvailableDBdrivers() -> list[str]:
 
 
 class cDriverType(enum.Enum):
-    """Supported Microsoft Access ODBC drivers."""
+    """ 
+    Supported Microsoft Access ODBC drivers.
+    
+    Examples of final conection strings:
+    Microsoft Access accdb ODBC Driver:
+        Driver={Microsoft Access Driver (*.mdb, *.accdb)};Dbq=C:\mydatabase.accdb;Uid=Admin;Pwd=;
+        for: 64bit Access 2007, Access 2010, Access 2013
+
+    """
     msAccess_32bit = "Microsoft Access Driver (*.mdb)"
     msAccess_64bit = "Microsoft Access Driver (*.mdb, *.accdb)"
 
@@ -87,10 +99,14 @@ class cMsAccessAPI:
         would run to completion and return before the "with" block even
         started, leaving no way to resume it afterwards to clean up.
         """
+        # check if the file exists before attempting to connect
+        if not self.filename.is_file():
+            raise FileNotFoundError(f"Database file not found: {self.filename}")
+
         try:
             conn = pyodbc.connect(self.connStr)
         except pyodbc.Error as e:
-            raise ConnectionError(f"Failed to connect to database '{self.filename}': {e}") from e
+            raise ConnectionError(f"Failed to connect to database '{self.filename}'\nwith connection string '{self.connStr}':\n{e}") from e
 
         try:
             # yield hands the open connection to the caller's "with" block
@@ -326,43 +342,3 @@ class cMsAccessDB:
         self.dbOperations = cDBoperations(self.dbApi)
         
         
-
-'''
-Other examples from older code:
-
-def insertDataInMDB(aTablename, aDF):
-    print("Entering insertDataInMDB()")
-    mdbFullpathname = os.path.join(config_workingDir, config_MDB_filename)
-    try:
-        # Microsoft Access Driver (*.mdb): works with 32-bit Python
-        # Microsoft Access Driver (*.mdb, *.accdb): works with 64-bit Python
-        # we want to use Microsoft Access Driver (*.mdb, *.accdb)
-        conn_str = (
-            r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
-            r'DBQ=' + mdbFullpathname + ';'
-        )
-        conn_str = (
-            r'DRIVER={Microsoft Access Driver (*.mdb)};'
-            r'DBQ=C:\\tmp\\PMSdownloads.mdb;'
-        )
-
-        conn_str = 'DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ="{}";'.format(mdbFullpathname)
-        print("Will use connection string:", conn_str)
-        cnxn = pyodbc.connect(conn_str)
-
-    except pyodbc.Error as e:
-        print("Error in Connection", e)
-        sys.exit(0)
-
-    print("Will insert the rows in the MDB table", aTablename)
-    # SQL = 'SELECT * FROM Index_data;'
-    # dfins = pd.read_sql(SQL, cnxn)
-    for index, row in aDF.iterrows():
-        sqlStr = "INSERT INTO "+ aTablename+ "(" + aDF.columns + ") VALUES("+row+")"
-        with cnxn.cursor() as DBcursor:
-            print(sqlStr)
-            # DBcursor.execute( sqlStr ) 
-            # DBcursor.commit()
-    cnxn.close()
-
-'''
