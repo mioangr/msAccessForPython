@@ -30,7 +30,7 @@ python -m pip install -e .
 Or without activating the environment:
 
 ```
-conda run -n your-environment-name python -m pip install -e .
+conda run -n your-environment-name pip install -e .
 ```
 
 The syntax is the same. However, conda must be initialized and available in cmd.exe, usually by opening Anaconda Prompt or Miniconda Prompt.
